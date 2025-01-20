@@ -1,0 +1,180 @@
+import openai
+import requests
+import speech_recognition as sr
+import pyttsx3
+from bs4 import BeautifulSoup
+import time
+import threading
+from datetime import datetime, timedelta
+#Openai Api key
+openai.api_key = "sk-"
+engine = pyttsx3.init()
+engine.setProperty("rate", 150)
+engine.setProperty("volume", 1)
+voices = engine.getProperty("voices")
+for voice in voices:
+    if "female" in voice.name.lower():
+        engine.setProperty("voice", voice.id)
+        break
+
+OPENWEATHER_API_KEY = ""
+
+timers = []
+reminders = []
+alarms = []
+stopwatch_start_time = None
+stopwatch_running = False
+
+def listen_to_user():
+    recognizer = sr.Recognizer()
+    mic = sr.Microphone()
+    with mic as source:
+        print("Listening for your command...")
+        recognizer.adjust_for_ambient_noise(source)
+        audio = recognizer.listen(source)
+    try:
+        print("Recognizing speech...")
+        command = recognizer.recognize_google(audio)
+        print(f"You said: {command}")
+        return command.lower()
+    except sr.UnknownValueError:
+        print("Sorry, I didn't understand that.")
+        return None
+    except sr.RequestError:
+        print("Sorry, there was an issue with the speech recognition service.")
+        return None
+
+def speak(text):
+    print(f"Assistant says: {text}")
+    engine.say(text)
+    engine.runAndWait()
+
+def set_timer(duration, message="Time's up!"):
+    def timer_thread():
+        time.sleep(duration)
+        speak(message)
+    threading.Thread(target=timer_thread).start()
+    timers.append({"duration": duration, "message": message})
+    speak(f"Timer set for {duration // 60} minutes and {duration % 60} seconds.")
+
+def set_reminder(reminder_time, message):
+    def reminder_thread():
+        while datetime.now() < reminder_time:
+            time.sleep(1)
+        speak(f"Reminder: {message}")
+    threading.Thread(target=reminder_thread).start()
+    reminders.append({"time": reminder_time, "message": message})
+    speak(f"Reminder set for {reminder_time.strftime('%I:%M %p')}.")
+
+def set_alarm(alarm_time):
+    def alarm_thread():
+        while datetime.now() < alarm_time:
+            time.sleep(1)
+        speak("Alarm ringing! Time to wake up!")
+    threading.Thread(target=alarm_thread).start()
+    alarms.append({"time": alarm_time})
+    speak(f"Alarm set for {alarm_time.strftime('%I:%M %p')}.")
+
+def start_stopwatch():
+    global stopwatch_start_time, stopwatch_running
+    stopwatch_start_time = datetime.now()
+    stopwatch_running = True
+    speak("Stopwatch started.")
+
+def stop_stopwatch():
+    global stopwatch_start_time, stopwatch_running
+    if stopwatch_running and stopwatch_start_time:
+        elapsed_time = datetime.now() - stopwatch_start_time
+        stopwatch_running = False
+        stopwatch_start_time = None
+        speak(f"Stopwatch stopped. Elapsed time: {elapsed_time}.")
+    else:
+        speak("The stopwatch is not running.")
+
+def handle_request(command):
+    if "timer" in command:
+        try:
+            duration = int(command.split("for")[1].strip().split()[0]) * 60
+            set_timer(duration)
+            return "Timer set."
+        except:
+            return "Sorry, I couldn't understand the timer duration."
+    if "reminder" in command:
+        try:
+            reminder_time_str = command.split("at")[1].strip()
+            reminder_time = datetime.strptime(reminder_time_str, "%I:%M %p")
+            if reminder_time < datetime.now():
+                reminder_time += timedelta(days=1)
+            message = command.split("to")[1].split("at")[0].strip()
+            set_reminder(reminder_time, message)
+            return "Reminder set."
+        except:
+            return "Sorry, I couldn't understand the reminder time."
+    if "alarm" in command:
+        try:
+            alarm_time_str = command.split("for")[1].strip()
+            alarm_time = datetime.strptime(alarm_time_str, "%I:%M %p")
+            if alarm_time < datetime.now():
+                alarm_time += timedelta(days=1)
+            set_alarm(alarm_time)
+            return "Alarm set."
+        except:
+            return "Sorry, I couldn't understand the alarm time."
+    if "start stopwatch" in command:
+        start_stopwatch()
+        return "Stopwatch started."
+    if "stop stopwatch" in command:
+        stop_stopwatch()
+        return "Stopwatch stopped."
+    if "search" in command or "find" in command:
+        query = command.replace("search", "").replace("find", "").strip()
+        if query:
+            result = search_the_web(query)
+            if result:
+                return f"Here’s what I found: {result}"
+            else:
+                return "Sorry, I couldn't find anything relevant."
+    openai_response = get_response_from_openai(command)
+    if openai_response and openai_response.strip():
+        return openai_response
+    return "Sorry, I couldn't understand that. Can you rephrase?"
+
+def get_response_from_openai(command):
+    try:
+        response = openai.Completion.create(
+            engine="gpt-3.5-turbo",
+            prompt=command,
+            max_tokens=150
+        )
+        return response.choices[0].text.strip()
+    except Exception as e:
+        return f"Sorry, I encountered an error while fetching information: {str(e)}"
+
+def search_the_web(query):
+    try:
+        search_url = f"https://www.duckduckgo.com/html/?q={query}"
+        response = requests.get(search_url)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        results = soup.find_all("a", class_="result__a")
+        if results:
+            return "\n".join([f"{i+1}. {result.text.strip()}" for i, result in enumerate(results[:5])])
+        return None
+    except Exception as e:
+        print(f"Error during web search: {e}")
+        return None
+
+def run_assistant():
+    speak("Hello! I am your assistant. How can I assist you today?")
+    while True:
+        command = listen_to_user()
+        if command:
+            if "exit" in command or "stop" in command:
+                speak("Goodbye! Have a great day!")
+                break
+            else:
+                response = handle_request(command)
+                speak(response)
+        time.sleep(1)
+
+if __name__ == "__main__":
+    run_assistant()
